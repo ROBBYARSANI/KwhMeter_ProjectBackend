@@ -14,7 +14,7 @@ function getDummyData() {
   const current = parseFloat((Math.random() * 10 + 1).toFixed(2));   
   const power = voltage * current;
 
-  const consumed = parseFloat(((power * 2) / 3600000).toFixed(6));
+  const consumed = parseFloat(((power * 2) / 3600000).toFixed(5));
 
   powerUsage += consumed;
 
