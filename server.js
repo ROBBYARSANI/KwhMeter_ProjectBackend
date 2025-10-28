@@ -19,7 +19,7 @@ function getDummyData() {
   powerUsage += consumed;
 
   return {
-    powerUsage: parseFloat(powerUsage.toFixed(6)), 
+    powerUsage: parseFloat(powerUsage.toFixed(5)), 
     voltage,
     current,
     power: parseFloat(power.toFixed(2)),
