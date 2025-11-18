@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { initializeApp } = require('firebase/app');
-const { getDatabase, ref, onValue, get } = require('firebase/database');
+const { getDatabase, ref, onValue } = require('firebase/database');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -9,10 +9,11 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
+// Firebase configuration - PERBAIKI URL DATABASE
 const firebaseConfig = {
   apiKey: "AIzaSyAKqzzlkxAM0Cld-vZzTTKKM2AehQ1d6aw",
-  authDomain: "listrik-bc131.firebasestorage.app",
-  databaseURL: "https://listrik-bc131-default-rtdb.asia-southeast1.firebasedatabase.app",
+  authDomain: "listrik-bc131.firebaseapp.com",
+  databaseURL: "https://listrik-bc131-default-rtdb.asia-southeast1.firebasedatabase.app", // Di gambar: listrik-bcl31 tapi config asli: listrik-bc131
   projectId: "listrik-bc131",
   storageBucket: "listrik-bc131.firebasestorage.app",
   messagingSenderId: "805499906429",
@@ -24,219 +25,117 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const database = getDatabase(firebaseApp);
 
-// Variabel untuk menyimpan data dan konfigurasi
+// Data structure sesuai dengan database
 let latestData = {
   powerUsage: 0,
   voltage: 0,
   current: 0,
   power: 0,
   consumed: 0,
-  timestamp: Date.now()
+  relayState: false,
+  timestamp: "",
+  serverTimestamp: Date.now()
 };
 
-let databaseStructure = null;
-
-// Fungsi untuk mendeteksi struktur database
-async function detectDatabaseStructure() {
+// Fungsi untuk mengkonversi time string "HH:mm:ss" ke timestamp lengkap
+function convertTimeToTimestamp(timeStr) {
+  if (!timeStr) return Date.now();
+  
   try {
-    console.log('🔍 Mendeteksi struktur database...');
-    const rootRef = ref(database, '/');
-    const snapshot = await get(rootRef);
+    const today = new Date();
+    const [hours, minutes, seconds] = timeStr.split(':').map(Number);
     
-    if (snapshot.exists()) {
-      const allData = snapshot.val();
-      databaseStructure = allData;
-      console.log('✅ Struktur database ditemukan:');
-      console.log(JSON.stringify(allData, null, 2));
-      
-      // Cari path yang mungkin berisi data sensor
-      const sensorPaths = findSensorPaths(allData);
-      console.log('📍 Path sensor yang mungkin:', sensorPaths);
-      
-      return sensorPaths;
-    } else {
-      console.log('❌ Database kosong');
-      return [];
-    }
+    // Set waktu sesuai dengan data
+    today.setHours(hours, minutes, seconds, 0);
+    
+    return today.getTime();
   } catch (error) {
-    console.error('❌ Error mendeteksi struktur:', error);
-    return [];
+    console.error('Error converting time:', error);
+    return Date.now();
   }
 }
 
-// Fungsi untuk mencari path yang berisi data sensor
-function findSensorPaths(data, currentPath = '') {
-  const paths = [];
-  
-  // Cek jika objek saat ini memiliki field sensor
-  if (typeof data === 'object' && data !== null) {
-    const keys = Object.keys(data);
-    
-    // Jika ada field yang mencurigakan sebagai data sensor
-    const sensorKeywords = ['voltage', 'current', 'power', 'energy', 'kwh', 'sensor', 'data', 'measurement'];
-    const hasSensorData = keys.some(key => 
-      sensorKeywords.some(keyword => 
-        key.toLowerCase().includes(keyword)
-      )
-    );
-    
-    if (hasSensorData) {
-      paths.push(currentPath || '/');
-    }
-    
-    // Rekursif untuk nested objects
-    for (const key of keys) {
-      const newPath = currentPath ? `${currentPath}/${key}` : key;
-      paths.push(...findSensorPaths(data[key], newPath));
-    }
-  }
-  
-  return paths;
-}
+// Path yang tepat berdasarkan struktur database
+const dataRef = ref(database, 'monitoring/current');
 
-// Fungsi untuk mengekstrak data dari berbagai struktur
-function extractSensorData(rawData) {
-  // Coba berbagai kemungkinan struktur data
-  const extracted = {
-    powerUsage: 0,
-    voltage: 0,
-    current: 0,
-    power: 0,
-    consumed: 0,
-    timestamp: Date.now(),
-    rawData: rawData // Simpan data mentah untuk debugging
-  };
-  
-  if (!rawData) return extracted;
-  
-  // Mapping berbagai kemungkinan nama field
-  const fieldMappings = {
-    powerUsage: ['powerUsage', 'energy', 'kwh', 'totalEnergy', 'accumulated', 'usage'],
-    voltage: ['voltage', 'tegangan', 'V', 'volts'],
-    current: ['current', 'arus', 'I', 'ampere', 'amps'],
-    power: ['power', 'daya', 'P', 'watt', 'powerNow'],
-    consumed: ['consumed', 'energyUsed', 'usage', 'consumption'],
-    timestamp: ['timestamp', 'time', 'lastUpdate', 'createdAt']
-  };
-  
-  // Fungsi helper untuk mencari value berdasarkan berbagai kemungkinan key
-  function findValue(obj, possibleKeys) {
-    for (const key of possibleKeys) {
-      if (obj && obj[key] !== undefined && obj[key] !== null) {
-        return obj[key];
-      }
-    }
-    return 0;
-  }
-  
-  // Ekstrak values
-  extracted.powerUsage = parseFloat(findValue(rawData, fieldMappings.powerUsage)) || 0;
-  extracted.voltage = parseFloat(findValue(rawData, fieldMappings.voltage)) || 0;
-  extracted.current = parseFloat(findValue(rawData, fieldMappings.current)) || 0;
-  extracted.power = parseFloat(findValue(rawData, fieldMappings.power)) || 0;
-  extracted.consumed = parseFloat(findValue(rawData, fieldMappings.consumed)) || 0;
-  
-  const timestampValue = findValue(rawData, fieldMappings.timestamp);
-  if (timestampValue) {
-    extracted.timestamp = typeof timestampValue === 'number' ? timestampValue : Date.parse(timestampValue) || Date.now();
-  }
-  
-  // Jika power tidak ada, hitung dari voltage dan current
-  if (extracted.power === 0 && extracted.voltage > 0 && extracted.current > 0) {
-    extracted.power = parseFloat((extracted.voltage * extracted.current).toFixed(2));
-  }
-  
-  return extracted;
-}
-
-// Setup listener untuk data realtime
-async function setupRealtimeListener() {
-  const sensorPaths = await detectDatabaseStructure();
-  
-  if (sensorPaths.length > 0) {
-    // Gunakan path pertama yang ditemukan
-    const primaryPath = sensorPaths[0];
-    console.log(`🎯 Menggunakan path: ${primaryPath}`);
+// Setup realtime listener
+onValue(dataRef, (snapshot) => {
+  const rawData = snapshot.val();
+  if (rawData) {
+    console.log('📊 Data diterima dari Firebase:', rawData);
     
-    const dataRef = ref(database, primaryPath);
+    // Map data langsung dari struktur Firebase
+    latestData = {
+      powerUsage: parseFloat(rawData.powerUsage || 0),
+      voltage: parseFloat(rawData.voltage || 0),
+      current: parseFloat(rawData.current || 0),
+      power: parseFloat(rawData.power || 0),
+      consumed: parseFloat(rawData.consumed || 0),
+      relayState: Boolean(rawData.relayState),
+      timestamp: rawData.timestamp || "",
+      serverTimestamp: Date.now(),
+      rawData: rawData // Untuk debugging
+    };
     
-    onValue(dataRef, (snapshot) => {
-      const rawData = snapshot.val();
-      if (rawData) {
-        latestData = extractSensorData(rawData);
-        console.log('📊 Data terupdate:', {
-          powerUsage: latestData.powerUsage,
-          voltage: latestData.voltage,
-          current: latestData.current,
-          power: latestData.power
-        });
-      }
-    }, (error) => {
-      console.error('❌ Error realtime listener:', error);
+    console.log('✅ Data terupdate:', {
+      powerUsage: latestData.powerUsage,
+      voltage: latestData.voltage,
+      current: latestData.current,
+      power: latestData.power,
+      consumed: latestData.consumed,
+      relayState: latestData.relayState,
+      timestamp: latestData.timestamp
     });
-    
-    return primaryPath;
-  } else {
-    console.log('⚠️ Tidak ada path sensor yang terdeteksi, menggunakan data default');
-    return null;
   }
-}
+}, (error) => {
+  console.error('❌ Error membaca data dari Firebase:', error);
+});
 
 // Endpoints
 app.get('/api/realtime', (req, res) => {
-  res.json(latestData);
+  // Tambahkan timestamp yang sudah dikonversi ke response
+  const responseData = {
+    ...latestData,
+    fullTimestamp: convertTimeToTimestamp(latestData.timestamp)
+  };
+  res.json(responseData);
 });
 
-app.get('/api/debug/structure', async (req, res) => {
+app.get('/api/relay/:state', async (req, res) => {
+  const state = req.params.state;
   try {
-    const rootRef = ref(database, '/');
-    const snapshot = await get(rootRef);
+    const relayRef = ref(database, 'monitoring/current/relayState');
     
-    if (snapshot.exists()) {
-      const allData = snapshot.val();
-      const sensorPaths = findSensorPaths(allData);
-      
-      res.json({
-        success: true,
-        fullStructure: allData,
-        detectedSensorPaths: sensorPaths,
-        currentData: latestData,
-        message: 'Check server console for detailed structure'
-      });
+    if (state === 'on') {
+      await set(relayRef, true);
+      res.json({ success: true, message: 'Relay turned ON', relayState: true });
+    } else if (state === 'off') {
+      await set(relayRef, false);
+      res.json({ success: true, message: 'Relay turned OFF', relayState: false });
     } else {
-      res.json({ 
-        success: false, 
-        message: 'Database is empty or inaccessible' 
-      });
+      res.status(400).json({ success: false, message: 'Invalid state. Use "on" or "off"' });
     }
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error('Error controlling relay:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/status', (req, res) => {
   res.json({
-    status: 'healthy',
-    firebaseConnected: !!database,
-    currentData: {
-      timestamp: new Date(latestData.timestamp).toISOString(),
-      hasData: latestData.voltage > 0 || latestData.current > 0
-    }
+    status: 'connected',
+    firebase: 'connected',
+    lastUpdate: new Date(latestData.serverTimestamp).toISOString(),
+    dataAge: Date.now() - latestData.serverTimestamp,
+    relayState: latestData.relayState
   });
 });
 
-// Initialize server
-app.listen(PORT, '0.0.0.0', async () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend server running on http://192.168.1.230:${PORT}`);
-  console.log('📡 Connecting to Firebase...');
-  
-  await setupRealtimeListener();
-  
+  console.log('📊 Monitoring data dari: monitoring/current');
   console.log('\n📍 Endpoints:');
   console.log(`   Realtime Data: http://192.168.1.230:${PORT}/api/realtime`);
-  console.log(`   Debug Structure: http://192.168.1.230:${PORT}/api/debug/structure`);
-  console.log(`   Health Check: http://192.168.1.230:${PORT}/api/health`);
+  console.log(`   Status: http://192.168.1.230:${PORT}/api/status`);
+  console.log(`   Relay Control: http://192.168.1.230:${PORT}/api/relay/on atau /api/relay/off`);
 });
