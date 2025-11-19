@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { initializeApp } = require('firebase/app');
-const { getDatabase, ref, onValue } = require('firebase/database');
+const { getDatabase, ref, onValue, set } = require('firebase/database');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -115,6 +115,21 @@ app.get('/api/relay/:state', async (req, res) => {
     } else {
       res.status(400).json({ success: false, message: 'Invalid state. Use "on" or "off"' });
     }
+  } catch (error) {
+    console.error('Error controlling relay:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/switch', async (req, res) => {
+  const { state } = req.body;
+  if (typeof state !== 'boolean') {
+    return res.status(400).json({ success: false, message: 'State must be a boolean' });
+  }
+  try {
+    const relayRef = ref(database, 'monitoring/current/relayState');
+    await set(relayRef, state);
+    res.json({ success: true, message: `Relay turned ${state ? 'ON' : 'OFF'}`, relayState: state });
   } catch (error) {
     console.error('Error controlling relay:', error);
     res.status(500).json({ success: false, error: error.message });
