@@ -9,11 +9,11 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
-// Firebase configuration - PERBAIKI URL DATABASE
+// Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyAKqzzlkxAM0Cld-vZzTTKKM2AehQ1d6aw",
   authDomain: "listrik-bc131.firebaseapp.com",
-  databaseURL: "https://listrik-bc131-default-rtdb.asia-southeast1.firebasedatabase.app", // Di gambar: listrik-bcl31 tapi config asli: listrik-bc131
+  databaseURL: "https://listrik-bc131-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: "listrik-bc131",
   storageBucket: "listrik-bc131.firebasestorage.app",
   messagingSenderId: "805499906429",
@@ -64,15 +64,19 @@ onValue(dataRef, (snapshot) => {
   if (rawData) {
     console.log('📊 Data diterima dari Firebase:', rawData);
     
+    // DEBUG: Log semua field yang tersedia untuk memastikan powerUsage ada
+    console.log('🔍 Field yang tersedia:', Object.keys(rawData));
+    
     // Map data langsung dari struktur Firebase
+    // Pastikan nama field sesuai dengan yang ada di Firebase
     latestData = {
-      powerUsage: parseFloat(rawData.powerUsage || 0),
-      voltage: parseFloat(rawData.voltage || 0),
-      current: parseFloat(rawData.current || 0),
-      power: parseFloat(rawData.power || 0),
-      consumed: parseFloat(rawData.consumed || 0),
-      relayState: Boolean(rawData.relayState),
-      timestamp: rawData.timestamp || "",
+      powerUsage: parseFloat(rawData.powerUsage || rawData.PowerUsage || rawData.power_usage || 0),
+      voltage: parseFloat(rawData.voltage || rawData.Voltage || 0),
+      current: parseFloat(rawData.current || rawData.Current || 0),
+      power: parseFloat(rawData.power || rawData.Power || 0),
+      consumed: parseFloat(rawData.consumed || rawData.Consumed || 0),
+      relayState: Boolean(rawData.relayState || rawData.relaystate || rawData.RelayState || false),
+      timestamp: rawData.timestamp || rawData.Timestamp || rawData.time || "",
       serverTimestamp: Date.now(),
       rawData: rawData // Untuk debugging
     };
@@ -142,8 +146,22 @@ app.get('/api/status', (req, res) => {
     firebase: 'connected',
     lastUpdate: new Date(latestData.serverTimestamp).toISOString(),
     dataAge: Date.now() - latestData.serverTimestamp,
-    relayState: latestData.relayState
+    relayState: latestData.relayState,
+    powerUsage: latestData.powerUsage
   });
+});
+
+// Endpoint khusus untuk debug struktur data Firebase
+app.get('/api/debug', (req, res) => {
+  const debugRef = ref(database, 'monitoring');
+  onValue(debugRef, (snapshot) => {
+    const allData = snapshot.val();
+    res.json({
+      message: 'Struktur data lengkap dari Firebase',
+      data: allData,
+      currentData: latestData
+    });
+  }, { onlyOnce: true }); // Hanya baca sekali
 });
 
 app.listen(PORT, '0.0.0.0', () => {
@@ -153,4 +171,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   Realtime Data: http://192.168.1.230:${PORT}/api/realtime`);
   console.log(`   Status: http://192.168.1.230:${PORT}/api/status`);
   console.log(`   Relay Control: http://192.168.1.230:${PORT}/api/relay/on atau /api/relay/off`);
+  console.log(`   Debug: http://192.168.1.230:${PORT}/api/debug`);
 });
