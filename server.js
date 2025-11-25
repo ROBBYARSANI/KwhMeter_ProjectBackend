@@ -25,6 +25,12 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const database = getDatabase(firebaseApp);
 
+// Variabel untuk kalkulasi powerUsage
+let cumulativePowerUsage = 0; // dalam Watt-jam (Wh) atau kWh
+let lastPower = 0;
+let lastUpdateTime = Date.now();
+let lastResetDate = new Date().getDate(); // Tanggal terakhir reset
+
 // Data structure sesuai dengan database
 let latestData = {
   powerUsage: 0,
@@ -36,6 +42,30 @@ let latestData = {
   timestamp: "",
   serverTimestamp: Date.now()
 };
+
+// Fungsi untuk cek dan reset daily powerUsage
+function checkAndResetDaily() {
+  const now = new Date();
+  const currentDate = now.getDate();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  
+  // Reset jika sudah lewat 23:59 dan tanggal berubah
+  if (currentDate !== lastResetDate && currentHour === 0 && currentMinute === 0) {
+    cumulativePowerUsage = 0;
+    lastResetDate = currentDate;
+    console.log('🔄 PowerUsage direset ke 0 untuk hari baru');
+  }
+}
+
+// Fungsi untuk menghitung powerUsage kumulatif
+function calculatePowerUsage(currentPower, timeElapsed) {
+  // currentPower dalam Watt, timeElapsed dalam milidetik
+  // Konversi ke Watt-jam: (Power × Time) / (1000 × 3600)
+  const energyConsumed = (currentPower * timeElapsed) / 3600000; // Hasil dalam Watt-jam
+  
+  return energyConsumed;
+}
 
 // Fungsi untuk mengkonversi time string "HH:mm:ss" ke timestamp lengkap
 function convertTimeToTimestamp(timeStr) {
@@ -64,20 +94,39 @@ onValue(dataRef, (snapshot) => {
   if (rawData) {
     console.log('📊 Data diterima dari Firebase:', rawData);
     
+    // Cek dan reset powerUsage daily
+    checkAndResetDaily();
+    
+    // Map data langsung dari struktur Firebase
+    const currentPower = parseFloat(rawData.power || rawData.Power || 0);
+    const currentTime = Date.now();
+    const timeElapsed = (currentTime - lastUpdateTime) / 1000; // dalam detik
+    
+    // Hitung powerUsage kumulatif hanya jika ada selisih waktu dan daya > 0
+    if (timeElapsed > 0 && currentPower > 0) {
+      const additionalUsage = calculatePowerUsage(currentPower, timeElapsed * 1000);
+      cumulativePowerUsage += additionalUsage;
+      
+      console.log(`⚡ Kalkulasi PowerUsage: +${additionalUsage.toFixed(6)} Wh, Total: ${cumulativePowerUsage.toFixed(6)} Wh`);
+    }
+    
+    // Update last values
+    lastPower = currentPower;
+    lastUpdateTime = currentTime;
+    
     // DEBUG: Log semua field yang tersedia untuk memastikan powerUsage ada
     console.log('🔍 Field yang tersedia:', Object.keys(rawData));
     
     // Map data langsung dari struktur Firebase
-    // Pastikan nama field sesuai dengan yang ada di Firebase
     latestData = {
-      powerUsage: parseFloat(rawData.powerUsage || rawData.PowerUsage || rawData.power_usage || 0),
+      powerUsage: cumulativePowerUsage, // Gunakan nilai kalkulasi, bukan dari Firebase
       voltage: parseFloat(rawData.voltage || rawData.Voltage || 0),
       current: parseFloat(rawData.current || rawData.Current || 0),
-      power: parseFloat(rawData.power || rawData.Power || 0),
+      power: currentPower,
       consumed: parseFloat(rawData.consumed || rawData.Consumed || 0),
       relayState: Boolean(rawData.relayState || rawData.relaystate || rawData.RelayState || false),
       timestamp: rawData.timestamp || rawData.Timestamp || rawData.time || "",
-      serverTimestamp: Date.now(),
+      serverTimestamp: currentTime,
       rawData: rawData // Untuk debugging
     };
     
@@ -100,7 +149,9 @@ app.get('/api/realtime', (req, res) => {
   // Tambahkan timestamp yang sudah dikonversi ke response
   const responseData = {
     ...latestData,
-    fullTimestamp: convertTimeToTimestamp(latestData.timestamp)
+    fullTimestamp: convertTimeToTimestamp(latestData.timestamp),
+    powerUsageWh: latestData.powerUsage, // dalam Watt-jam
+    powerUsageKWh: latestData.powerUsage / 1000 // dalam kWh
   };
   res.json(responseData);
 });
@@ -140,6 +191,27 @@ app.post('/api/switch', async (req, res) => {
   }
 });
 
+// Endpoint untuk reset manual powerUsage
+app.post('/api/reset-power', (req, res) => {
+  cumulativePowerUsage = 0;
+  lastResetDate = new Date().getDate();
+  console.log('🔄 PowerUsage direset manual ke 0');
+  res.json({ success: true, message: 'PowerUsage reset to 0', powerUsage: 0 });
+});
+
+// Endpoint untuk melihat info powerUsage
+app.get('/api/power-info', (req, res) => {
+  res.json({
+    cumulativePowerUsage: cumulativePowerUsage,
+    powerUsageWh: cumulativePowerUsage,
+    powerUsageKWh: cumulativePowerUsage / 1000,
+    lastPower: lastPower,
+    lastUpdateTime: new Date(lastUpdateTime).toISOString(),
+    lastResetDate: lastResetDate,
+    nextReset: '23:59 daily'
+  });
+});
+
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'connected',
@@ -147,7 +219,8 @@ app.get('/api/status', (req, res) => {
     lastUpdate: new Date(latestData.serverTimestamp).toISOString(),
     dataAge: Date.now() - latestData.serverTimestamp,
     relayState: latestData.relayState,
-    powerUsage: latestData.powerUsage
+    powerUsage: latestData.powerUsage,
+    powerUsageKWh: latestData.powerUsage / 1000
   });
 });
 
@@ -159,17 +232,30 @@ app.get('/api/debug', (req, res) => {
     res.json({
       message: 'Struktur data lengkap dari Firebase',
       data: allData,
-      currentData: latestData
+      currentData: latestData,
+      powerCalculation: {
+        cumulativePowerUsage: cumulativePowerUsage,
+        lastPower: lastPower,
+        lastUpdateTime: lastUpdateTime,
+        lastResetDate: lastResetDate
+      }
     });
   }, { onlyOnce: true }); // Hanya baca sekali
 });
 
+// Setup interval untuk cek reset harian (setiap menit)
+setInterval(checkAndResetDaily, 60000);
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend server running on http://192.168.1.230:${PORT}`);
   console.log('📊 Monitoring data dari: monitoring/current');
+  console.log('⚡ PowerUsage dihitung kumulatif dari daya (power)');
+  console.log('🔄 Reset otomatis setiap hari pukul 23:59');
   console.log('\n📍 Endpoints:');
   console.log(`   Realtime Data: http://192.168.1.230:${PORT}/api/realtime`);
   console.log(`   Status: http://192.168.1.230:${PORT}/api/status`);
+  console.log(`   Power Info: http://192.168.1.230:${PORT}/api/power-info`);
   console.log(`   Relay Control: http://192.168.1.230:${PORT}/api/relay/on atau /api/relay/off`);
+  console.log(`   Reset Power: http://192.168.1.230:${PORT}/api/reset-power`);
   console.log(`   Debug: http://192.168.1.230:${PORT}/api/debug`);
 });
