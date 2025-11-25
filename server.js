@@ -129,7 +129,7 @@ onValue(dataRef, (snapshot) => {
     // Map data langsung dari struktur Firebase
     latestData = {
       powerUsage: parseFloat(dailyPowerUsageKWh.toFixed(6)), // dalam kWh dengan 6 digit desimal
-      voltage: voltage,
+      voltage: parseFloat(voltage.toFixed(2)), // dalam Volt dengan 2 digit desimal
       current: current,
       power: parseFloat(rawData.power || rawData.Power || 0),
       consumed: parseFloat(consumedWatts.toFixed(2)), // dalam Watt dengan 2 digit desimal
@@ -274,6 +274,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend server running on http://192.168.1.230:${PORT}`);
   console.log('📊 Monitoring data dari: monitoring/current');
   console.log('⚡ Consumed = V × I (Watt) - 2 digit desimal');
+  console.log('🔌 Voltage = Tegangan (V) - 2 digit desimal');
   console.log('📈 PowerUsage = Akumulasi energi HARIAN (kWh) - reset setiap tengah malam');
   console.log('🔄 Reset otomatis setiap hari pukul 00:00');
   console.log('\n📍 Endpoints:');
