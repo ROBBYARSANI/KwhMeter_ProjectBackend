@@ -99,8 +99,14 @@ onValue(dataRef, (snapshot) => {
     const voltage = parseFloat(rawData.voltage || rawData.Voltage || 0);
     const current = parseFloat(rawData.current || rawData.Current || 0);
     
-    // Hitung consumed (daya sesaat) dalam Watt: P = V × I
+    // AMBIL NILAI POWER DARI DATABASE (dalam Watt)
+    const powerWatts = parseFloat(rawData.power || rawData.Power || 0);
+    
+    // Hitung consumed (daya sesaat) dalam Watt: P = V × I (untuk backup/fallback)
     const consumedWatts = voltage * current;
+    
+    // GUNAKAN powerWatts UNTUK PERHITUNGAN ENERGI
+    const powerForCalculation = powerWatts > 0 ? powerWatts : consumedWatts;
     
     // Hitung powerUsage kumulatif HARIAN (dalam kWh)
     const currentTime = Date.now();
@@ -109,14 +115,15 @@ onValue(dataRef, (snapshot) => {
     // HITUNG ENERGI HANYA JIKA:
     // - Bukan data pertama
     // - Ada selisih waktu yang positif
-    // - Ada konsumsi daya (consumedWatts > 0)
-    if (!isFirstData && timeElapsedHours > 0 && consumedWatts > 0) {
+    // - Ada konsumsi daya (powerForCalculation > 0)
+    if (!isFirstData && timeElapsedHours > 0 && powerForCalculation > 0) {
       // Hitung energi yang dikonsumsi sejak update terakhir
-      const energyConsumedKWh = calculateEnergyConsumption(consumedWatts, timeElapsedHours);
+      const energyConsumedKWh = calculateEnergyConsumption(powerForCalculation, timeElapsedHours);
       dailyPowerUsageKWh += energyConsumedKWh;
       
       console.log(`⏱️  Waktu berlalu: ${timeElapsedHours.toFixed(6)} jam`);
-      console.log(`⚡ Energi dikonsumsi: ${energyConsumedKWh.toFixed(6)} kWh`);
+      console.log(`⚡ Daya digunakan: ${powerForCalculation.toFixed(2)} W`);
+      console.log(`🔋 Energi dikonsumsi: ${energyConsumedKWh.toFixed(6)} kWh`);
       console.log(`📈 PowerUsage harian: ${dailyPowerUsageKWh.toFixed(6)} kWh`);
     } else if (isFirstData) {
       console.log(`🔰 Data pertama hari ini: PowerUsage diinisialisasi`);
@@ -131,8 +138,8 @@ onValue(dataRef, (snapshot) => {
       powerUsage: parseFloat(dailyPowerUsageKWh.toFixed(6)), // dalam kWh dengan 6 digit desimal
       voltage: parseFloat(voltage.toFixed(2)), // dalam Volt dengan 2 digit desimal
       current: current,
-      power: parseFloat(rawData.power || rawData.Power || 0),
-      consumed: parseFloat(consumedWatts.toFixed(2)), // dalam Watt dengan 2 digit desimal
+      power: parseFloat(powerWatts.toFixed(2)), // dalam Watt dengan 2 digit desimal (nilai dari database)
+      consumed: parseFloat(consumedWatts.toFixed(2)), // dalam Watt dengan 2 digit desimal (backup calculation)
       relayState: Boolean(rawData.relayState || rawData.relaystate || rawData.RelayState || false),
       timestamp: rawData.timestamp || rawData.Timestamp || rawData.time || "",
       serverTimestamp: currentTime
@@ -142,7 +149,8 @@ onValue(dataRef, (snapshot) => {
       powerUsage: `${latestData.powerUsage} kWh`,
       voltage: `${latestData.voltage} V`,
       current: `${latestData.current} A`,
-      consumed: `${latestData.consumed} W`,
+      power: `${latestData.power} W (dari database)`,
+      consumed: `${latestData.consumed} W (calculated)`,
       relayState: latestData.relayState,
       timestamp: latestData.timestamp,
       hari: `Hari ${currentDay}`
@@ -160,7 +168,8 @@ app.get('/api/realtime', (req, res) => {
     fullTimestamp: convertTimeToTimestamp(latestData.timestamp),
     powerUsageKWh: latestData.powerUsage, // dalam kWh
     consumedWatts: latestData.consumed, // dalam Watt
-    currentDay: currentDay // Informasi hari saat ini
+    currentDay: currentDay, // Informasi hari saat ini
+    calculationSource: 'power' // Menandakan perhitungan menggunakan power dari database
   };
   res.json(responseData);
 });
@@ -227,8 +236,9 @@ app.get('/api/power-info', (req, res) => {
     currentDay: currentDay,
     nextReset: tomorrow.toISOString(),
     resetIn: `${Math.round((tomorrow - now) / (1000 * 60 * 60))} jam`,
-    calculationMethod: 'Energy (kWh) = V × I × time (converted to kWh)',
-    description: 'PowerUsage menunjukkan konsumsi energi kumulatif dalam 24 jam terakhir (reset otomatis setiap tengah malam)'
+    calculationMethod: 'Energy (kWh) = Power (W) × time (converted to kWh)',
+    powerSource: 'database',
+    description: 'PowerUsage menunjukkan konsumsi energi kumulatif dalam 24 jam terakhir (reset otomatis setiap tengah malam). Perhitungan menggunakan nilai Power dari database.'
   });
 });
 
@@ -240,10 +250,11 @@ app.get('/api/status', (req, res) => {
     dataAge: Date.now() - latestData.serverTimestamp,
     relayState: latestData.relayState,
     dailyPowerUsageKWh: latestData.powerUsage,
-    currentConsumedWatts: latestData.consumed,
+    currentPowerWatts: latestData.power,
     voltage: latestData.voltage,
     current: latestData.current,
-    currentDay: currentDay
+    currentDay: currentDay,
+    calculationSource: 'power'
   });
 });
 
@@ -261,7 +272,8 @@ app.get('/api/debug', (req, res) => {
         lastUpdateTime: lastUpdateTime,
         currentDay: currentDay,
         isFirstData: isFirstData,
-        calculation: `Energy (kWh) = V × I × time / 1000`
+        calculation: `Energy (kWh) = Power (W) × time / 1000`,
+        powerSource: 'database'
       }
     });
   }, { onlyOnce: true });
@@ -273,9 +285,9 @@ setInterval(checkAndResetDaily, 60000);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Backend server running on http://192.168.1.230:${PORT}`);
   console.log('📊 Monitoring data dari: monitoring/current');
-  console.log('⚡ Consumed = V × I (Watt) - 2 digit desimal');
+  console.log('⚡ Power = Daya (Watt) dari database - digunakan untuk perhitungan energi');
   console.log('🔌 Voltage = Tegangan (V) - 2 digit desimal');
-  console.log('📈 PowerUsage = Akumulasi energi HARIAN (kWh) - reset setiap tengah malam');
+  console.log('📈 PowerUsage = Akumulasi energi HARIAN (kWh) - menggunakan Power dari database');
   console.log('🔄 Reset otomatis setiap hari pukul 00:00');
   console.log('\n📍 Endpoints:');
   console.log(`   Realtime Data: http://192.168.1.230:${PORT}/api/realtime`);
